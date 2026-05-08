@@ -585,6 +585,8 @@ struct SDL_Rect {
 };
 bool SDL_StartTextInput(SDL_Window *);
 bool SDL_StopTextInput(SDL_Window *);
+bool SDL_HideCursor(void);
+bool SDL_ShowCursor(void);
 struct SDL_CommonEvent {
   Uint32 type;
   Uint32 reserved;
@@ -1026,6 +1028,7 @@ SDL_Texture *SDL_CreateTexture(SDL_Renderer *, SDL_PixelFormat, SDL_TextureAcces
 SDL_Window *SDL_CreateWindow(const char *, int, int, SDL_WindowFlags);
 void SDL_DestroyRenderer(SDL_Renderer *);
 void SDL_DestroyTexture(SDL_Texture *);
+void SDL_DestroyWindow(SDL_Window *);
 bool SDL_EnableScreenSaver(void);
 bool SDL_GetCurrentRenderOutputSize(SDL_Renderer *, int *, int *);
 bool SDL_GetWindowSize(SDL_Window *, int *, int *);

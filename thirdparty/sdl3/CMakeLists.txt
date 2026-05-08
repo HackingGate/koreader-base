@@ -1,5 +1,6 @@
 list(APPEND PATCH_FILES
     cmake_tweaks.patch
+    wayland_tablet_cursor_visibility.patch
     # Remove workarounds for standalone applications and add
     # a couple of actions to be used from the osx main menu.
     cocoa.patch
@@ -40,6 +41,12 @@ if(USE_SDL STREQUAL "builtin")
         -DSDL_KMSDRM=OFF
         -DSDL_ROCKCHIP=OFF
     )
+    if(DEFINED ENV{KO_SDL_NO_X11})
+        list(APPEND CMAKE_ARGS
+            -DSDL_X11=OFF
+            -DSDL_WAYLAND_LIBDECOR=OFF
+        )
+    endif()
 endif()
 
 list(APPEND BUILD_CMD COMMAND ninja)

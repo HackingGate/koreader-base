@@ -165,8 +165,7 @@ function framebuffer:setWindowIcon(icon)
 end
 
 function framebuffer:close()
-    SDL.SDL.SDL_DestroyRenderer(SDL.renderer)
-    SDL.SDL.SDL_Quit()
+    SDL.close()
 end
 
 return require("ffi/framebuffer"):extend(framebuffer)

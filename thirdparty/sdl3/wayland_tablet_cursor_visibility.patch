@@ -1,0 +1,109 @@
+diff --git a/src/video/wayland/SDL_waylandevents.c b/src/video/wayland/SDL_waylandevents.c
+index eb30831..c0157cc 100644
+--- a/src/video/wayland/SDL_waylandevents.c
++++ b/src/video/wayland/SDL_waylandevents.c
+@@ -377 +377 @@ static void Wayland_SeatCreateCursorShape(SDL_WaylandSeat *seat)
+-        if (seat->pointer.wl_pointer && !seat->pointer.cursor_state.cursor_shape) {
++        if (Wayland_ShouldCreateCursorShape() && seat->pointer.wl_pointer && !seat->pointer.cursor_state.cursor_shape) {
+@@ -383 +383 @@ static void Wayland_SeatCreateCursorShape(SDL_WaylandSeat *seat)
+-            if (!tool->cursor_state.cursor_shape) {
++            if (Wayland_ShouldCreateTabletCursorShape() && !tool->cursor_state.cursor_shape) {
+@@ -872,0 +873 @@ static void pointer_handle_leave(void *data, struct wl_pointer *pointer,
++    Wayland_SeatClearCursor(seat);
+@@ -3301,0 +3303 @@ static void tablet_tool_handle_removed(void *data, struct zwp_tablet_tool_v2 *to
++    Wayland_TabletToolClearCursor(sdltool);
+@@ -3475,0 +3478 @@ static void tablet_tool_handle_frame(void *data, struct zwp_tablet_tool_v2 *tool
++        Wayland_TabletToolClearCursor(sdltool);
+@@ -3522 +3522 @@ static void tablet_seat_handle_tool_added(void *data, struct zwp_tablet_seat_v2
+-        if (seat->display->cursor_shape_manager) {
++        if (seat->display->cursor_shape_manager && Wayland_ShouldCreateTabletCursorShape()) {
+@@ -3562,0 +3566 @@ static void Wayland_remove_all_pens_callback(SDL_PenID instance_id, void *handle
++    Wayland_TabletToolClearCursor(sdltool);
+@@ -3627,0 +3632 @@ void Wayland_DisplayRemoveWindowReferencesFromSeats(SDL_VideoData *display, SDL_
++            Wayland_SeatClearCursor(seat);
+@@ -3641,0 +3647 @@ void Wayland_DisplayRemoveWindowReferencesFromSeats(SDL_VideoData *display, SDL_
++                Wayland_TabletToolClearCursor(tool);
+diff --git a/src/video/wayland/SDL_waylandmouse.c b/src/video/wayland/SDL_waylandmouse.c
+index e367abc..db877bc 100644
+--- a/src/video/wayland/SDL_waylandmouse.c
++++ b/src/video/wayland/SDL_waylandmouse.c
+@@ -1212,0 +1213,20 @@ void Wayland_DisplayUpdatePointerFocusedScale(SDL_WindowData *updated_window)
++bool Wayland_ShouldCreateCursorShape(void)
++{
++    return !SDL_GetHintBoolean("SDL_VIDEO_WAYLAND_HIDE_CURSOR", false);
++}
++
++bool Wayland_ShouldCreateTabletCursorShape(void)
++{
++    return Wayland_ShouldCreateCursorShape() && !SDL_GetHintBoolean("SDL_VIDEO_WAYLAND_HIDE_TABLET_CURSOR", false);
++}
++
++static bool Wayland_ShouldShowCursor(const SDL_Mouse *mouse)
++{
++    return mouse->cursor_visible && Wayland_ShouldCreateCursorShape();
++}
++
++static bool Wayland_ShouldShowTabletCursor(const SDL_Mouse *mouse)
++{
++    return mouse->cursor_visible && Wayland_ShouldCreateTabletCursorShape();
++}
++
+@@ -1220,0 +1241,4 @@ static bool Wayland_ShowCursor(SDL_Cursor *cursor)
++    if (vd->is_quitting || !Wayland_ShouldShowCursor(mouse)) {
++        cursor = NULL;
++    }
++
+@@ -1241 +1265,2 @@ static bool Wayland_ShowCursor(SDL_Cursor *cursor)
+-                Wayland_CursorStateSetCursor(&tool->cursor_state, &obj, tool->focus, tool->proximity_serial, mouse->cur_cursor);
++                SDL_Cursor *tool_cursor = (cursor && Wayland_ShouldShowTabletCursor(mouse)) ? mouse->cur_cursor : NULL;
++                Wayland_CursorStateSetCursor(&tool->cursor_state, &obj, tool->focus, tool->proximity_serial, tool_cursor);
+@@ -1464 +1489 @@ void Wayland_RecreateCursors(void)
+-        if (mouse->cursor_visible) {
++        if (Wayland_ShouldShowCursor(mouse)) {
+@@ -1555,0 +1581,14 @@ void Wayland_FiniMouse(SDL_VideoData *data)
++void Wayland_SeatClearCursor(SDL_WaylandSeat *seat)
++{
++    const Wayland_PointerObject obj = {
++        .wl_pointer = seat->pointer.wl_pointer,
++        .is_pointer = true
++    };
++
++    if (seat->pointer.wl_pointer) {
++        Wayland_CursorStateSetCursor(&seat->pointer.cursor_state, &obj, seat->pointer.focus, seat->pointer.enter_serial, NULL);
++    } else {
++        Wayland_CursorStateResetCursor(&seat->pointer.cursor_state);
++    }
++}
++
+@@ -1566 +1605 @@ void Wayland_SeatUpdatePointerCursor(SDL_WaylandSeat *seat)
+-        if (mouse->cursor_visible) {
++        if (Wayland_ShouldShowCursor(mouse)) {
+@@ -1597 +1636 @@ void Wayland_TabletToolUpdateCursor(SDL_WaylandPenTool *tool)
+-        if (mouse->cursor_visible) {
++        if (Wayland_ShouldShowTabletCursor(mouse)) {
+@@ -1614,0 +1654,14 @@ void Wayland_TabletToolUpdateCursor(SDL_WaylandPenTool *tool)
++void Wayland_TabletToolClearCursor(SDL_WaylandPenTool *tool)
++{
++    const Wayland_PointerObject obj = {
++        .wl_tool = tool->wltool,
++        .is_pointer = false
++    };
++
++    if (tool->wltool) {
++        Wayland_CursorStateSetCursor(&tool->cursor_state, &obj, tool->focus, tool->proximity_serial, NULL);
++    } else {
++        Wayland_CursorStateResetCursor(&tool->cursor_state);
++    }
++}
++
+diff --git a/src/video/wayland/SDL_waylandmouse.h b/src/video/wayland/SDL_waylandmouse.h
+index 4da5435..df991d4 100644
+--- a/src/video/wayland/SDL_waylandmouse.h
++++ b/src/video/wayland/SDL_waylandmouse.h
+@@ -30,0 +31 @@ extern void Wayland_SeatResetCursor(SDL_WaylandSeat *seat);
++extern void Wayland_SeatClearCursor(SDL_WaylandSeat *seat);
+@@ -31,0 +33,2 @@ extern void Wayland_DisplayUpdatePointerFocusedScale(SDL_WindowData *updated_window);
++extern bool Wayland_ShouldCreateCursorShape(void);
++extern bool Wayland_ShouldCreateTabletCursorShape(void);
+@@ -32,0 +36 @@ extern void Wayland_TabletToolUpdateCursor(SDL_WaylandPenTool *tool);
++extern void Wayland_TabletToolClearCursor(SDL_WaylandPenTool *tool);

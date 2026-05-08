@@ -49,6 +49,31 @@ local S = {
     SDL = SDL,
 }
 
+local function setCursorVisible(visible, force)
+    local major, minor = getSDLVersion()
+    if major < 3 or (major == 3 and minor < 2) then
+        return
+    end
+
+    if not force and S.cursor_visible == visible then
+        return
+    end
+
+    local ok
+    if visible then
+        ok = SDL.SDL_ShowCursor()
+    else
+        ok = SDL.SDL_HideCursor()
+    end
+
+    if ok then
+        S.cursor_visible = visible
+    else
+        io.write("SDL: could not ", visible and "show" or "hide",
+                 " cursor: ", ffi.string(SDL.SDL_GetError()), "\n")
+    end
+end
+
 local function openGameController()
     local num_joysticks = ffi.new("int[1]")
     local joystick_ids = SDL.SDL_GetJoysticks(num_joysticks)
@@ -86,6 +111,13 @@ function S.open(w, h, x, y)
     end
 
     SDL.SDL_SetMainReady()
+    -- KOReader consumes native mouse, touch, and pen events directly; keep SDL's synthetic streams out.
+    SDL.SDL_SetHint("SDL_MOUSE_TOUCH_EVENTS", "0")
+    SDL.SDL_SetHint("SDL_TOUCH_MOUSE_EVENTS", "0")
+    SDL.SDL_SetHint("SDL_PEN_MOUSE_EVENTS", "0")
+    SDL.SDL_SetHint("SDL_PEN_TOUCH_EVENTS", "0")
+    SDL.SDL_SetHint("SDL_VIDEO_WAYLAND_HIDE_CURSOR", "1")
+    SDL.SDL_SetHint("SDL_VIDEO_WAYLAND_HIDE_TABLET_CURSOR", "1")
 
     if SDL.SDL_Init(bit.bor(SDL.SDL_INIT_VIDEO,
                             SDL.SDL_INIT_EVENTS,
@@ -127,6 +159,7 @@ function S.open(w, h, x, y)
     SDL.SDL_SetWindowPosition(S.screen, pos_x, pos_y)
 
     SDL.SDL_SyncWindow(S.screen)
+    setCursorVisible(false)
 
     -- Disable TextInput until we enable it.
     -- Also see <https://github.com/slouken/SDL/commit/c0f9a3d814a815ec6e2822d7fd2e8648df79f7b9>.
@@ -183,6 +216,33 @@ function S.destroyTexture(texture)
     SDL.SDL_DestroyTexture(texture)
 end
 
+function S.close()
+    if SDL.SDL_WasInit(SDL.SDL_INIT_VIDEO) == 0 then
+        return
+    end
+
+    if S.texture ~= nil then
+        SDL.SDL_DestroyTexture(S.texture)
+        S.texture = nil
+    end
+
+    if S.renderer ~= nil then
+        SDL.SDL_DestroyRenderer(S.renderer)
+        S.renderer = nil
+    end
+
+    if S.screen ~= nil then
+        -- SDL_QuitMouse() calls SDL_ShowCursor(). Destroy the window first so
+        -- Wayland tablet focus is gone before that shutdown redraw happens.
+        setCursorVisible(false, true)
+        SDL.SDL_DestroyWindow(S.screen)
+        S.screen = nil
+    end
+
+    S.cursor_visible = nil
+    SDL.SDL_Quit()
+end
+
 local rect = ffi.metatype("SDL_Rect", {})
 function S.rect(x, y, w, h)
     return rect(x, y, w, h)
@@ -230,6 +290,8 @@ local pen_tool_state = {
 
 local SDL_TOUCH_MOUSEID = 0xFFFFFFFF -- ((SDL_MouseID)-1), generated as signed -1 in our cdefs.
 local SDL_PEN_MOUSEID = 0xFFFFFFFE -- ((SDL_MouseID)-2), not generated in our cdefs.
+local SDL_MOUSE_TOUCHID = ffi.cast("SDL_TouchID", -1)
+local SDL_PEN_TOUCHID = ffi.cast("SDL_TouchID", -2)
 local SDL_PEN_SLOT = 4
 local TOOL_TYPE_FINGER = 0
 local TOOL_TYPE_PEN = 1
@@ -251,6 +313,10 @@ local function shouldHandleMousePointer(which)
     local now_sec, now_usec = util.gettime()
     return now_sec > suppress_mouse_until_sec
         or (now_sec == suppress_mouse_until_sec and now_usec >= suppress_mouse_until_usec)
+end
+
+local function shouldHandleFingerPointer(event)
+    return event.tfinger.touchID ~= SDL_MOUSE_TOUCHID and event.tfinger.touchID ~= SDL_PEN_TOUCHID
 end
 
 local function hasPenFlag(pen_state, flag)
@@ -582,10 +648,12 @@ function S.waitForEvent(sec, usec)
     elseif event.type == SDL.SDL_EVENT_TEXT_INPUT then
         genEmuEvent(C.EV_SDL, SDL.SDL_EVENT_TEXT_INPUT, ffi.string(event.text.text))
     elseif event.type == SDL.SDL_EVENT_PEN_PROXIMITY_IN then
+        setCursorVisible(false)
         local pen_id = tonumber(event.pproximity.which)
         suppressMousePointersAfterPenEvent()
         beginPenProximity(pen_id, TOOL_TYPE_PEN, true)
     elseif event.type == SDL.SDL_EVENT_PEN_DOWN then
+        setCursorVisible(false)
         local pen_id = tonumber(event.ptouch.which)
         local pen_state = bit.bor(tonumber(event.ptouch.pen_state) or 0, event.ptouch.down and SDL_PEN_INPUT_DOWN or 0)
         local tool = getPenTool(event.ptouch.eraser, pen_state)
@@ -595,6 +663,7 @@ function S.waitForEvent(sec, usec)
         syncPenButtons(pen_state)
         updatePenContact(pen_id, pen_state, tool, x, y)
     elseif event.type == SDL.SDL_EVENT_PEN_UP then
+        setCursorVisible(false)
         local pen_id = tonumber(event.ptouch.which)
         local pen_state = tonumber(event.ptouch.pen_state) or 0
         local tool = getPenTool(event.ptouch.eraser, pen_state)
@@ -605,6 +674,7 @@ function S.waitForEvent(sec, usec)
         endPenContact(pen_id, tool, x, y)
         endImplicitPenProximity(pen_id)
     elseif event.type == SDL.SDL_EVENT_PEN_MOTION then
+        setCursorVisible(false)
         local pen_id = tonumber(event.pmotion.which)
         local pen_state = tonumber(event.pmotion.pen_state) or 0
         local tool = getPenTool(false, pen_state)
@@ -612,6 +682,7 @@ function S.waitForEvent(sec, usec)
         syncPenButtons(pen_state)
         updatePenContact(pen_id, pen_state, tool, event.pmotion.x * scale_x, event.pmotion.y * scale_y)
     elseif event.type == SDL.SDL_EVENT_PEN_AXIS then
+        setCursorVisible(false)
         local pen_id = tonumber(event.paxis.which)
         local pen_state = tonumber(event.paxis.pen_state) or 0
         local tool = getPenTool(false, pen_state)
@@ -620,6 +691,7 @@ function S.waitForEvent(sec, usec)
         updatePenContact(pen_id, pen_state, tool, event.paxis.x * scale_x, event.paxis.y * scale_y)
     elseif event.type == SDL.SDL_EVENT_PEN_BUTTON_DOWN
         or event.type == SDL.SDL_EVENT_PEN_BUTTON_UP then
+        setCursorVisible(false)
         local pen_id = tonumber(event.pbutton.which)
         local pen_state = tonumber(event.pbutton.pen_state) or 0
         local tool = getPenTool(false, pen_state)
@@ -635,12 +707,13 @@ function S.waitForEvent(sec, usec)
         setPenButtonState(button_code, event.type == SDL.SDL_EVENT_PEN_BUTTON_DOWN)
         updatePenContact(pen_id, pen_state, tool, x, y)
     elseif event.type == SDL.SDL_EVENT_PEN_PROXIMITY_OUT then
+        setCursorVisible(false)
         local pen_id = tonumber(event.pproximity.which)
         suppressMousePointersAfterPenEvent()
         endPenProximity(pen_id)
         syncPenButtons(0)
-    elseif event.type == SDL.SDL_EVENT_MOUSE_MOTION and shouldHandleMousePointer(event.motion.which)
-        or event.type == SDL.SDL_EVENT_FINGER_MOTION then
+    elseif (event.type == SDL.SDL_EVENT_MOUSE_MOTION and shouldHandleMousePointer(event.motion.which))
+        or (event.type == SDL.SDL_EVENT_FINGER_MOTION and shouldHandleFingerPointer(event)) then
         local is_finger = event.type == SDL.SDL_EVENT_FINGER_MOTION
         local slot
 
@@ -648,6 +721,7 @@ function S.waitForEvent(sec, usec)
             slot = getFingerSlot(event)
             genTouchMoveEvent(event, slot, event.tfinger.x * S.w, event.tfinger.y * S.h)
         else
+            setCursorVisible(true)
             if pointers[0] and pointers[0].down then
                 slot = 0 -- left mouse button down
                 local x = event.motion.x * scale_x
@@ -663,9 +737,9 @@ function S.waitForEvent(sec, usec)
                 genTouchMoveEvent(event, slot, x, y)
             end
         end
-    elseif event.type == SDL.SDL_EVENT_MOUSE_BUTTON_UP and shouldHandleMousePointer(event.button.which)
-        or event.type == SDL.SDL_EVENT_FINGER_UP then
-        local is_finger = event.type == SDL.SDL_EVENT_FINGER_UP
+    elseif (event.type == SDL.SDL_EVENT_MOUSE_BUTTON_UP and shouldHandleMousePointer(event.button.which))
+        or ((event.type == SDL.SDL_EVENT_FINGER_UP or event.type == SDL.SDL_EVENT_FINGER_CANCELED) and shouldHandleFingerPointer(event)) then
+        local is_finger = event.type == SDL.SDL_EVENT_FINGER_UP or event.type == SDL.SDL_EVENT_FINGER_CANCELED
         local slot
         if is_finger then
             slot = getFingerSlot(event)
@@ -678,6 +752,9 @@ function S.waitForEvent(sec, usec)
             return false, C.EINTR
         end
 
+        if not is_finger then
+            setCursorVisible(true)
+        end
         local x = is_finger and event.tfinger.x * S.w or event.button.x * scale_x
         local y = is_finger and event.tfinger.y * S.h or event.button.y * scale_y
         genTouchUpEvent(event, slot, x, y)
@@ -686,8 +763,8 @@ function S.waitForEvent(sec, usec)
         else
             pointers[slot] = nil
         end
-    elseif event.type == SDL.SDL_EVENT_MOUSE_BUTTON_DOWN and shouldHandleMousePointer(event.button.which)
-        or event.type == SDL.SDL_EVENT_FINGER_DOWN then
+    elseif (event.type == SDL.SDL_EVENT_MOUSE_BUTTON_DOWN and shouldHandleMousePointer(event.button.which))
+        or (event.type == SDL.SDL_EVENT_FINGER_DOWN and shouldHandleFingerPointer(event)) then
         local is_finger = event.type == SDL.SDL_EVENT_FINGER_DOWN
         if not is_finger and not (event.button.button == SDL.SDL_BUTTON_LEFT or event.button.button == SDL.SDL_BUTTON_RIGHT) then
             -- We don't do anything with extra buttons for now.
@@ -706,10 +783,12 @@ function S.waitForEvent(sec, usec)
         local x = is_finger and event.tfinger.x * S.w or event.button.x * scale_x
         local y = is_finger and event.tfinger.y * S.h or event.button.y * scale_y
         if not is_finger then
+            setCursorVisible(true)
             setPointerDownState(slot, true, x, y)
         end
         genTouchDownEvent(event, slot, x, y)
     elseif event.type == SDL.SDL_EVENT_MOUSE_WHEEL then
+        setCursorVisible(true)
         genEmuEvent(C.EV_SDL, SDL.SDL_EVENT_MOUSE_WHEEL, event.wheel)
     elseif event.type == SDL.SDL_EVENT_DROP_FILE then
         local dropped_file_path = ffi.string(event.drop.data)
