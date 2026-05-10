@@ -560,6 +560,7 @@ typedef Uint32 SDL_PenID;
 typedef Uint32 SDL_PenInputFlags;
 typedef enum SDL_PixelFormat SDL_PixelFormat;
 typedef enum SDL_PowerState SDL_PowerState;
+typedef struct SDL_Cursor SDL_Cursor;
 typedef struct SDL_Rect SDL_Rect;
 typedef struct SDL_Renderer SDL_Renderer;
 typedef enum SDL_Scancode SDL_Scancode;

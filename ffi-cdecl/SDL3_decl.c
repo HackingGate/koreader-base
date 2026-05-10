@@ -47,6 +47,7 @@ cdecl_enum(SDL_TextureAccess)
 
 cdecl_type(SDL_AudioDeviceID)
 cdecl_type(SDL_CameraID)
+cdecl_type(SDL_Cursor)
 cdecl_type(SDL_DisplayID)
 cdecl_type(SDL_DisplayModeData)
 cdecl_type(SDL_EventType)
