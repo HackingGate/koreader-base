@@ -84,6 +84,7 @@ cdecl_struct(SDL_Rect)
 cdecl_func(SDL_StartTextInput)
 cdecl_func(SDL_StopTextInput)
 cdecl_func(SDL_HideCursor)
+cdecl_func(SDL_SetCursor)
 cdecl_func(SDL_ShowCursor)
 
 cdecl_struct(SDL_CommonEvent)

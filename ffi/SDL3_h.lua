@@ -586,6 +586,7 @@ struct SDL_Rect {
 bool SDL_StartTextInput(SDL_Window *);
 bool SDL_StopTextInput(SDL_Window *);
 bool SDL_HideCursor(void);
+bool SDL_SetCursor(SDL_Cursor *);
 bool SDL_ShowCursor(void);
 struct SDL_CommonEvent {
   Uint32 type;

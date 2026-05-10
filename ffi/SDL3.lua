@@ -74,6 +74,17 @@ local function setCursorVisible(visible, force)
     end
 end
 
+local function forceCursorRedraw()
+    local major, minor = getSDLVersion()
+    if major < 3 or (major == 3 and minor < 2) then
+        return
+    end
+
+    if not SDL.SDL_SetCursor(nil) then
+        io.write("SDL: could not redraw cursor: ", ffi.string(SDL.SDL_GetError()), "\n")
+    end
+end
+
 local function openGameController()
     local num_joysticks = ffi.new("int[1]")
     local joystick_ids = SDL.SDL_GetJoysticks(num_joysticks)
@@ -232,9 +243,14 @@ function S.close()
     end
 
     if S.screen ~= nil then
-        -- SDL_QuitMouse() calls SDL_ShowCursor(). Destroy the window first so
-        -- Wayland tablet focus is gone before that shutdown redraw happens.
+        -- SDL_QuitMouse() calls SDL_ShowCursor(). Force one last hidden cursor
+        -- redraw and roundtrip while Wayland tablet focus is still valid.
         setCursorVisible(false, true)
+        forceCursorRedraw()
+        if not SDL.SDL_SyncWindow(S.screen) then
+            io.write("SDL: could not sync window before shutdown: ",
+                     ffi.string(SDL.SDL_GetError()), "\n")
+        end
         SDL.SDL_DestroyWindow(S.screen)
         S.screen = nil
     end
