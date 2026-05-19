@@ -238,6 +238,7 @@ local SDL_PEN_INPUT_DOWN = bit.lshift(1, 0)
 local SDL_PEN_INPUT_BUTTON_1 = bit.lshift(1, 1)
 local SDL_PEN_INPUT_BUTTON_2 = bit.lshift(1, 2)
 local SDL_PEN_INPUT_ERASER_TIP = bit.lshift(1, 30)
+local SDL_PEN_PRESSURE_MAX = 1024
 
 local function isMousePointer(which)
     local pointer_id = tonumber(which)
@@ -277,6 +278,25 @@ local function syncPenButtons(pen_state)
     setPenButtonState(C.BTN_STYLUS2, hasPenFlag(pen_state, SDL_PEN_INPUT_BUTTON_2))
 end
 
+local function normalizePenPressure(value)
+    local pressure = tonumber(value)
+    if pressure == nil then
+        return nil
+    end
+    if pressure < 0 then
+        pressure = 0
+    elseif pressure > 1 then
+        pressure = 1
+    end
+    return math.floor(pressure * SDL_PEN_PRESSURE_MAX + 0.5)
+end
+
+local function genPenPressureEvent(pressure)
+    if pressure ~= nil then
+        genEmuEvent(C.EV_ABS, C.ABS_PRESSURE, pressure)
+    end
+end
+
 local function getPenToolKey(tool)
     return tool == TOOL_TYPE_ERASER and C.BTN_TOOL_RUBBER or C.BTN_TOOL_PEN
 end
@@ -307,13 +327,14 @@ local function clearPenToolState()
     end
 end
 
-local function genPenDownEvent(slot, tracking_id, tool, x, y)
+local function genPenDownEvent(slot, tracking_id, tool, x, y, pressure)
     setPenToolState(tool, true)
     genEmuEvent(C.EV_ABS, C.ABS_MT_SLOT, slot)
     genEmuEvent(C.EV_ABS, C.ABS_MT_TOOL_TYPE, tool)
     genEmuEvent(C.EV_ABS, C.ABS_MT_TRACKING_ID, tracking_id)
     genEmuEvent(C.EV_ABS, C.ABS_MT_POSITION_X, x)
     genEmuEvent(C.EV_ABS, C.ABS_MT_POSITION_Y, y)
+    genPenPressureEvent(pressure)
     genEmuEvent(C.EV_SYN, C.SYN_REPORT, 0)
 end
 
@@ -323,23 +344,26 @@ local function genPenUpEvent(slot, tool, x, y)
     genEmuEvent(C.EV_ABS, C.ABS_MT_TRACKING_ID, -1)
     genEmuEvent(C.EV_ABS, C.ABS_MT_POSITION_X, x)
     genEmuEvent(C.EV_ABS, C.ABS_MT_POSITION_Y, y)
+    genPenPressureEvent(0)
     genEmuEvent(C.EV_SYN, C.SYN_REPORT, 0)
 end
 
-local function genPenMoveEvent(slot, tool, x, y)
+local function genPenMoveEvent(slot, tool, x, y, pressure)
     genEmuEvent(C.EV_ABS, C.ABS_MT_SLOT, slot)
     genEmuEvent(C.EV_ABS, C.ABS_MT_TOOL_TYPE, tool)
     genEmuEvent(C.EV_ABS, C.ABS_MT_POSITION_X, x)
     genEmuEvent(C.EV_ABS, C.ABS_MT_POSITION_Y, y)
+    genPenPressureEvent(pressure)
     genEmuEvent(C.EV_SYN, C.SYN_REPORT, 0)
 end
 
-local function genPenHoverEvent(slot, tool, x, y)
+local function genPenHoverEvent(slot, tool, x, y, pressure)
     genEmuEvent(C.EV_ABS, C.ABS_MT_SLOT, slot)
     genEmuEvent(C.EV_ABS, C.ABS_MT_TOOL_TYPE, tool)
     genEmuEvent(C.EV_ABS, C.ABS_MT_TRACKING_ID, -1)
     genEmuEvent(C.EV_ABS, C.ABS_MT_POSITION_X, x)
     genEmuEvent(C.EV_ABS, C.ABS_MT_POSITION_Y, y)
+    genPenPressureEvent(pressure)
     genEmuEvent(C.EV_SYN, C.SYN_REPORT, 0)
 end
 
@@ -392,10 +416,10 @@ local function updatePenHover(pen_id, tool, x, y)
     pointer.tool = tool
     pointer.x = x
     pointer.y = y
-    genPenHoverEvent(SDL_PEN_SLOT, tool, x, y)
+    genPenHoverEvent(SDL_PEN_SLOT, tool, x, y, 0)
 end
 
-local function updatePenContact(pen_id, pen_state, tool, x, y)
+local function updatePenContact(pen_id, pen_state, tool, x, y, pressure)
     local pointer = pen_pointers[pen_id]
     local is_down = hasPenFlag(pen_state, SDL_PEN_INPUT_DOWN) or (pointer and pointer.down)
     if not is_down then
@@ -404,11 +428,14 @@ local function updatePenContact(pen_id, pen_state, tool, x, y)
     end
 
     pointer = beginPenProximity(pen_id, tool, false)
+    if pressure ~= nil then
+        pointer.pressure = pressure
+    end
 
     if pointer.down then
-        genPenMoveEvent(SDL_PEN_SLOT, tool, x, y)
+        genPenMoveEvent(SDL_PEN_SLOT, tool, x, y, pointer.pressure)
     else
-        genPenDownEvent(SDL_PEN_SLOT, pointer.tracking_id, tool, x, y)
+        genPenDownEvent(SDL_PEN_SLOT, pointer.tracking_id, tool, x, y, pointer.pressure)
     end
 
     pointer.down = true
@@ -428,6 +455,7 @@ local function endPenContact(pen_id, tool, x, y)
     pointer.tool = tool or pointer.tool
     pointer.x = x or pointer.x
     pointer.y = y or pointer.y
+    pointer.pressure = nil
 end
 
 local function setPointerDownState(slot, down, x, y)
@@ -615,9 +643,13 @@ function S.waitForEvent(sec, usec)
         local pen_id = tonumber(event.paxis.which)
         local pen_state = tonumber(event.paxis.pen_state) or 0
         local tool = getPenTool(false, pen_state)
+        local pressure
+        if event.paxis.axis == SDL.SDL_PEN_AXIS_PRESSURE then
+            pressure = normalizePenPressure(event.paxis.value)
+        end
         suppressMousePointersAfterPenEvent()
         syncPenButtons(pen_state)
-        updatePenContact(pen_id, pen_state, tool, event.paxis.x * scale_x, event.paxis.y * scale_y)
+        updatePenContact(pen_id, pen_state, tool, event.paxis.x * scale_x, event.paxis.y * scale_y, pressure)
     elseif event.type == SDL.SDL_EVENT_PEN_BUTTON_DOWN
         or event.type == SDL.SDL_EVENT_PEN_BUTTON_UP then
         local pen_id = tonumber(event.pbutton.which)
